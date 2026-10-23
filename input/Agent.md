@@ -898,11 +898,22 @@ Linux 板卡的正常关机流程：登录板端后，以有权限的用户执�
 - 2026-10-22 任务 1.14 终审：学习者修正 `m->state` 拼写后，`sm_handle_event` 的非法状态检查、FAULT/RESET 写回与回调顺序均符合契约。任务 1.14 源码审阅通过，100/100；未声称编译/运行。进入任务 1.15 Git 基础。
 - 阶段 1 的链表、状态机/回调、Git 和协议库综合作品仍是路线要求；不因任务编号达到 14 就提前宣布阶段通过。
 
+### 当前教学入口（2026-10-23，最新）
+
+- 任务 1.15 Git/GitHub 首次管理验收通过：学习者亲自完成暂存检查、本地提交、SSH origin、master 重命名 main、push -u；学习者确认网页 main 上源码和 records 可见，产品资料未上传。持久 safe.directory 设置由不带前缀的 git status 验证。HTTPS TLS 错误根因未查明，但 SSH 工作流完成目标。
+- 当前任务 1.16：单向链表。完整接口契约和验收标准见 records/sessions/2026-10-23-任务1.16-单向链表.md。
+- 阶段 1 后续仍需完成纯 C 串口协议库综合作品及闭卷知识测验，不能因 GitHub 上传而结项。
+- 本轮记录晚于远端提交 6da68c5，尚未再次提交、推送；留待下一次常规阶段性同步。
+
 ### 当前教学入口（2026-10-23，覆盖此前当前状态）
 
 - 当前仍为阶段 1 任务 1.15。学习者明确希望亲自上传到 GitHub 管理学习仓库，学习代码、Agent.md 与 Markdown 学习记录需要保留，产品资料目录不上传。
+- safe.directory 持久配置补讲：上传成功仅说明远端接受提交，不改变本地仓库所有者 CodexSandboxOffline 与当前用户 zgd 不同的事实。`-c` 只在一次调用中临时信任；学习者可在本人 PowerShell 执行 `git config --global --add safe.directory C:/Users/zgd/Desktop/study`，为本人用户持久信任这一个目录，随后在 study 直接用 `git status` 验证。该设置不更改文件所有者、不上传 GitHub，也不是信任所有仓库。教师只指导未代执行；未验证前不声称前缀已可省略。此前“仍需保留前缀”只适用于尚未持久配置的状态。
+- safe.directory 验证完成（2026-10-23）：学习者已配置全局目录信任，并在 study 目录直接执行 `git status` 成功；命令不再因 dubious ownership 中止。状态显示 `main...origin/main`，本地分支与远端跟踪关系存在；3 个学习记录文件为工作区修改，来自推送后教师补充的记录，尚未再次提交/推送。GitHub 网页文件范围核对仍待学习者完成。
+- 最新进展（覆盖下方历史上传状态）：学习者通过 SSH 成功执行 `push -u origin main`，输出 `[new branch] main -> main`、`branch 'main' set up to track 'origin/main'`。只读本地复核为 `main 6da68c5 [origin/main] docs: record first local commit`，origin fetch/push 均为 SSH 地址。远端关联、重命名和首次推送已通过，不再要求 OpenSSL/HTTPS 排查；这不代表原 HTTPS 握手根因已查明。当前只待学习者在 GitHub main 分支网页确认源码和学习记录存在、产品资料不在上传范围。教师不代提交或推送；本轮尚未提交的学习记录留待下次常规提交。
+- Windows 换行符补讲：学习者 add 最新记录时遇到 `LF will be replaced by CRLF` 警告；这是工作区行尾转换提示，本身不阻止暂存，不表示文件损坏。无需因此改配置或重写文件，按原计划继续 commit、remote、push；后续操作仍以实际输出确认，不把警告当成上传失败。
 - 本轮补讲：`.gitignore` 中 `**/` 匹配零层或多层目录，`*.exe` 匹配以 .exe 结尾的名称，`**/*.exe` 因此覆盖根目录及任意子目录中的 .exe；不含斜杠的 `*.exe` 在本规则位置也可实现同样的忽略效果。已有本地 `.git` 仓库，add/diff/commit 不需要关联 GitHub，也不需要网络；remote 配置记录远端地址，push 才发送提交。学习者提出疑问，尚未据讲解标记掌握或暂存完成。
 - 教师指导并审阅结果，不代为创建 GitHub 仓库、暂存、提交或推送。流程为选择文件并暂存 → 检查暂存内容 → 本地提交 → 关联 GitHub 仓库 → 推送与网页核对；commit 是本地快照，push 才将提交发送到远端。
 - 最新暂存与本地提交检查（2026-10-23）：学习者已亲自暂存并提交部分清单。教师对 `.gitignore`、`input/Agent.md`、`learning/`、`records/` 的只读暂存检查显示 72 个新增文件、5696 行新增（本轮文档更新前快照），该范围不含 .exe；工作区 `.gitignore` 已补 `**/*.exe`。学习者随后运行 `git log -1 --oneline`，确认首次本地提交 `b2f0415 (HEAD -> master) Initial commit: learning code and records`。本地提交通过；远端关联和上传尚未验证。
 - 学习者已提供 GitHub 网页地址 `https://github.com/zgd7788/embebded_study`；预定 HTTPS 远端地址为 `https://github.com/zgd7788/embebded_study.git`，保留原仓库拼写。未验证远端是否为空或可访问，不宣称已关联或上传。
-- 当前下一步：本轮教师维护记录尚未包含在 `b2f0415`，由学习者再次暂存并提交 `input/Agent.md` 与 `records/` 的最新版本，然后配置 GitHub 远端并推送。补讲 add 保存执行当时的文件快照，后续编辑不自动进入暂存区；commit -m 指定提交说明，不上传 GitHub。若遇作者身份缺失，先反馈错误，再学习仓库级身份配置。不索取密码、令牌，不读取 Project。详见 `records/sessions/2026-10-23-任务1.15-GitHub远端管理.md`。
+- 最新 GitHub 上传状态：本地已确认第二次提交 `6da68c5 docs: record first local commit`，origin 的 fetch/push 地址均为指定 GitHub HTTPS 地址。学习者 push 报 `schannel: failed to receive handshake, SSL/TLS connection failed`；发生于 TLS 建连阶段，尚未证明上传成功。Git 为 2.54.0.windows.1，后端 schannel；只读检查未发现目标 URL 的显式 Git HTTP 代理及当前进程常见代理环境变量，不能由此排除系统/网络路径问题。下一步指导学习者用单次 `-c http.sslBackend=openssl` 执行 `ls-remote origin` 并立即检查 PowerShell `$LASTEXITCODE`；成功再以同参数 push，不改全局配置、不关闭证书验证。不索取密码、令牌，不读取 Project。详见当日 GitHub 远端管理记录。
