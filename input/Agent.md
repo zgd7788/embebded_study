@@ -903,6 +903,6 @@ Linux 板卡的正常关机流程：登录板端后，以有权限的用户执�
 - 当前仍为阶段 1 任务 1.15。学习者明确希望亲自上传到 GitHub 管理学习仓库，学习代码、Agent.md 与 Markdown 学习记录需要保留，产品资料目录不上传。
 - 本轮补讲：`.gitignore` 中 `**/` 匹配零层或多层目录，`*.exe` 匹配以 .exe 结尾的名称，`**/*.exe` 因此覆盖根目录及任意子目录中的 .exe；不含斜杠的 `*.exe` 在本规则位置也可实现同样的忽略效果。已有本地 `.git` 仓库，add/diff/commit 不需要关联 GitHub，也不需要网络；remote 配置记录远端地址，push 才发送提交。学习者提出疑问，尚未据讲解标记掌握或暂存完成。
 - 教师指导并审阅结果，不代为创建 GitHub 仓库、暂存、提交或推送。流程为选择文件并暂存 → 检查暂存内容 → 本地提交 → 关联 GitHub 仓库 → 推送与网页核对；commit 是本地快照，push 才将提交发送到远端。
-- 最新暂存检查（2026-10-23）：学习者已亲自暂存并提交部分清单。教师对 `.gitignore`、`input/Agent.md`、`learning/`、`records/` 的只读暂存检查显示 72 个新增文件、5696 行新增（本轮文档更新前快照），该范围不含 .exe；工作区 `.gitignore` 已补 `**/*.exe`。暂存步骤通过，首次 commit、远端关联和上传尚未验证。
+- 最新暂存与本地提交检查（2026-10-23）：学习者已亲自暂存并提交部分清单。教师对 `.gitignore`、`input/Agent.md`、`learning/`、`records/` 的只读暂存检查显示 72 个新增文件、5696 行新增（本轮文档更新前快照），该范围不含 .exe；工作区 `.gitignore` 已补 `**/*.exe`。学习者随后运行 `git log -1 --oneline`，确认首次本地提交 `b2f0415 (HEAD -> master) Initial commit: learning code and records`。本地提交通过；远端关联和上传尚未验证。
 - 学习者已提供 GitHub 网页地址 `https://github.com/zgd7788/embebded_study`；预定 HTTPS 远端地址为 `https://github.com/zgd7788/embebded_study.git`，保留原仓库拼写。未验证远端是否为空或可访问，不宣称已关联或上传。
-- 当前下一步：教师维护记录后，由学习者再次暂存 `input/Agent.md` 与 `records/` 的最新版本，再执行首次本地 commit，使用 `log -1 --oneline` 查看结果。补讲 add 保存执行当时的文件快照，后续编辑不自动进入暂存区；commit -m 指定提交说明，不上传 GitHub。若遇作者身份缺失，先反馈错误，再学习仓库级身份配置。本地提交后再继续关联远端与推送。不索取密码、令牌，不读取 Project。详见 `records/sessions/2026-10-23-任务1.15-GitHub远端管理.md`。
+- 当前下一步：本轮教师维护记录尚未包含在 `b2f0415`，由学习者再次暂存并提交 `input/Agent.md` 与 `records/` 的最新版本，然后配置 GitHub 远端并推送。补讲 add 保存执行当时的文件快照，后续编辑不自动进入暂存区；commit -m 指定提交说明，不上传 GitHub。若遇作者身份缺失，先反馈错误，再学习仓库级身份配置。不索取密码、令牌，不读取 Project。详见 `records/sessions/2026-10-23-任务1.15-GitHub远端管理.md`。
