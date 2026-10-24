@@ -1,4 +1,4 @@
-OBJ = main.c 
+OBJ = task17_test.c 
 main:OBJ
 	gcc -std=c11 -Wall -Wextra -Werror main.c -o main
 clean:
