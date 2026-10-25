@@ -48,30 +48,33 @@ int frame_encode(uint8_t *out,
     {
         return -1;   
     }
-    if((out_capacity >= payload_length + 4)||(payload_length > 8))
+    if (payload_length > 8u)
+    {
+        return -1;
+    }
+    
+    size_t required_length = (size_t)payload_length + 4u;
+    
+    if (out_capacity < required_length)
     {
         return -1;
     }
     uint8_t check_outsum = 0;
-    if(payload_length == 0)
+   
+    *out = 0xAA;
+    *(out+1) = payload_length;
+    *(out+2) = command;
+    for(size_t i=0; i < payload_length; i++)
     {
-        *out = 0xAA;
-        *(out+1) = 0x00;
-        *(out+2) = command;
-        *(out+3) = frame_checksum(out+1,2,&check_outsum);
-        *frame_length_out = 4;
+        *(out+i+3) = *(payload+i);
     }
-    else
+    
+    if(frame_checksum(out + 1, payload_length + 2, &check_outsum) != 0)
     {
-        *out = 0xAA;
-        *(out+1) = payload_length;
-        *(out+2) = command;
-        for(size_t i=0; i < payload_length; i++)
-        {
-            *(out+i+3) = *(payload+i);
-        }
-        *(out+3+payload_length) = frame_checksum(out+1,2,&check_outsum);
-        *frame_length_out = 4+payload_length;
+       return -1;
     }
+    *(out+3+payload_length) = check_outsum;
+    *frame_length_out = 4+payload_length;
+
     return 0;
 }
