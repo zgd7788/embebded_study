@@ -11,10 +11,12 @@ typedef struct {
     uint32_t timeout_ms;
 } protocol_rx_t;
 
-protocol_rx_t rx = {
-    .timeout_ms = 20U
-};
 
-int protocol_rx_process(protocol_rx_t *rx, frame_t *frame_out);
+int protocol_rx_init(protocol_rx_t *rx,
+                     uint8_t *storage,
+                     size_t capacity,
+                     uint32_t timeout_ms);
+int protocol_rx_process(protocol_rx_t *rx, uint32_t now_ms, frame_t *frame_out);
+int protocol_rx_check_timeout(protocol_rx_t *rx, uint32_t now_ms);
 
 #endif
