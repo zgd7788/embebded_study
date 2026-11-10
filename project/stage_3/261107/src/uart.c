@@ -5,7 +5,7 @@
 /*
     功能：配置并启用 UART4
     参数：
-        @config：串口配置，只读；包括波特率、字长、校验和停止位
+        @config：串口配置，只读；包括波特率、字长、校验和停止位，FIFO模式是否启用
         @uart_clock_hz：UART4 当前内核时钟频率，单位 Hz
     前置条件：UART4 外设访问时钟已开启，且 uart_clock_hz 与当前内核时钟一致
     返回值：成功返回 0；参数无效、BRR 超出支持范围或波特率误差超过 2% 返回 1
@@ -15,13 +15,16 @@ int UART4_Init(const uart_init_t *config, uint32_t uart_clock_hz)
 {
     if(config ==NULL)
     {
-        return 1;
+        return 1U;
     }
     if ((config->BaudRate == 0U) || (uart_clock_hz == 0U))
     {
-        return 1;
+        return 1U;
     }
-
+    if((config->FifoMode != UART_FIFO_DISABLE) && (config->FifoMode != UART_FIFO_ENABLE))
+    {
+        return 1U;
+    }
     uint32_t BaudRate = config->BaudRate;
     const uint32_t stop_mask = 3U;
     uint32_t cr1_config = 0U;
@@ -49,6 +52,18 @@ int UART4_Init(const uart_init_t *config, uint32_t uart_clock_hz)
     {
         return 1;
     }
+    switch (config->FifoMode)
+    {
+    case UART_FIFO_ENABLE:
+        cr1_config |= (1U << 29U);
+        break;
+    case UART_FIFO_DISABLE:
+        cr1_config &= ~(1U << 29U);
+        break;
+    default:
+        break;
+    }
+
     switch (config->WordLength)
     {
         /* 将字长转换成 CR1 的 M1、M0 配置 */
@@ -117,7 +132,7 @@ int UART4_Init(const uart_init_t *config, uint32_t uart_clock_hz)
     UART4->BRR = (uint16_t)brr;
     /* 配置字长和校验 */
     UART4->CR1 &= ~((1U << 12U) | (1U << 28U) |
-                   (1U << 10U) | (1U << 9U));
+                   (1U << 10U) | (1U << 9U) | (1U << 29U));
     UART4->CR1 |= cr1_config;
     /* 配置停止位 */
     UART4->CR2 &= ~(3U << 12U);
@@ -276,4 +291,45 @@ int HAL_UART4_GetString(char *buf, uint8_t buf_size)
 
     buf[index] = '\0';
     return (overflow != 0U) ? 2 : 0;
+}
+
+int HAL_UART4_ReadAvailable(uint8_t *buf, size_t capacity, size_t *received_out)
+{
+    if((buf == NULL)||(received_out == NULL)||(capacity == 0U))
+    {
+        return 1U;
+    }
+    *received_out = 0U;
+    if((UART4->ISR & UART_ISR_RXFNE) == 0U)
+    {
+        return 0U;
+    }
+    size_t count = 0U;
+    while ((count < capacity) && ((UART4->ISR & UART_ISR_RXFNE) != 0U))
+    {
+        buf[count++] = UART4->RDR;
+    }
+    *received_out = count;
+    return 0;
+}
+
+int HAL_UART4_WriteAvailable(const uint8_t *buf, size_t capacity, size_t *sent_out)
+{
+    if((buf == NULL)||(sent_out == NULL)||(capacity == 0U))
+    {
+        return 1U;
+    }
+    *sent_out = 0U;
+    /* 发送FIFO满 */
+    if((UART4->ISR & UART_ISR_TXFNF) == 0U)
+    {
+        return 0U;
+    }
+    size_t count = 0U;
+    while ((count < capacity) && ((UART4->ISR & UART_ISR_TXFNF) != 0U))
+    {
+        UART4->TDR = buf[count++];
+    }
+    *sent_out = count;
+    return 0U;
 }

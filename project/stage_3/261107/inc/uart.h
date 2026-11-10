@@ -8,6 +8,10 @@
 #define UART_ISR_TXNF (1U << 7U)
 #define UART_ISR_TC  (1U << 6U)
 #define UART_ISR_RXNE (1U << 5U)
+
+#define UART_ISR_RXFNE (1U << 5U)
+#define UART_ISR_TXFNF (1U << 7U)
+
 typedef enum
 {
     UART_WORDLENGTH_8BIT = 0U,
@@ -30,12 +34,19 @@ typedef enum
     UART_STOP_1_5BIT,
 }uart_stopbits_e;
 
+typedef enum
+{
+    UART_FIFO_DISABLE = 0U,
+    UART_FIFO_ENABLE ,
+} uart_fifo_mode_e;
+
 typedef struct 
 {
     uint32_t BaudRate;
     uart_wordlength_e WordLength;
     uart_parity_e Paritysel;
     uart_stopbits_e Stopbits;
+    uart_fifo_mode_e  FifoMode;
 }uart_init_t;
 
 typedef struct
@@ -60,5 +71,7 @@ void HAL_UART4_PutChar(uint8_t data);
 int HAL_UART4_GetChar(uint8_t *data_out);
 int HAL_UART4_PutString(const char *str);
 int HAL_UART4_GetString(char *buf, uint8_t buf_size);
+int HAL_UART4_ReadAvailable(uint8_t *buf, size_t capacity, size_t *received_out);
+int HAL_UART4_WriteAvailable(const uint8_t *buf, size_t capacity, size_t *sent_out);
 
 #endif
