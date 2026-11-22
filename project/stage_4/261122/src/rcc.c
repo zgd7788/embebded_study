@@ -1,0 +1,161 @@
+#include "rcc.h"
+
+#define RCC_HSI_READY_MASK ((1U << 0U) | (1U << 2U))
+#define RCC_HSI_WAIT_LIMIT 1000000U
+
+/*
+    功能：通过 MPU 侧 RCC 开启指定 GPIO 端口的总线时钟。
+          GPIOA、GPIOB、GPIOC、GPIOG 写 AHB4 使能寄存器，GPIOZ 写 AHB5 使能寄存器。
+    参数：
+        @GPIOx：GPIO 端口的寄存器组地址，例如 &GPIOA。
+    返回值：写入时钟使能位后返回 0，端口不支持时返回 -1。
+*/
+int RCC_GPIO_EnableClock(volatile gpio_t *GPIOx)
+{
+    if(GPIOx == &GPIOA)
+    {
+        RCC_MP_AHB4ENSETR = GPIOA_EN_Msk;
+    }
+    else if(GPIOx == &GPIOB)
+    {
+        RCC_MP_AHB4ENSETR = GPIOB_EN_Msk;
+    }
+    else if(GPIOx == &GPIOC)
+    {
+        RCC_MP_AHB4ENSETR = GPIOC_EN_Msk;
+    }
+    else if(GPIOx == &GPIOG)
+    {
+        RCC_MP_AHB4ENSETR = GPIOG_EN_Msk;
+    }
+    else if(GPIOx == &GPIOZ)
+    {
+        RCC_MP_AHB5ENSETR = GPIOZ_EN_Msk;
+    }
+    else 
+    {
+        return -1;
+    }
+    return 0;
+}
+/*
+    功能：选择 USART2 和 UART4 共用的内核时钟源
+    参数：
+        @source：时钟源，可选 UART4_PCLK1、UART4_PLL4_Q、
+                 UART_HSI、UART_CSI 或 UART_HSE
+    前置条件：
+        调用方已保证目标时钟源开启并就绪，且已按要求停止并禁用
+        受此次切换影响的 USART2/UART4；切换期间无其他代码修改该选源字段
+    返回值：选源字段写入后返回 0；source 无效返回 1，且不修改寄存器
+    说明：本函数只修改 RCC 选源字段，不开启振荡器、不检查源就绪状态，
+          也不修改 UART 的 CR1.UE；改变此字段会同时影响 USART2 和 UART4
+*/
+int RCC_UART4_SelectClock(uart4_clock_source_e source)
+{
+    if((uint32_t)source > (uint32_t)UART_HSE)
+    {
+        return 1;
+    }
+    uint32_t value = RCC_UART24CKSELR;
+    value = (value & ~0x7U) | (uint32_t)source;
+    RCC_UART24CKSELR = value;
+    return 0;
+}
+/*
+    功能：通过 MPU 侧 RCC 寄存器使能 UART4 外设时钟
+    参数：无
+    返回值：无
+    说明：向 RCC_MP_APB1ENSETR 的 UART4EN 位写 1，
+          不改变其他外设的时钟使能状态；不选择 UART4 内核时钟源，
+          也不设置 UART 的 CR1.UE 或配置波特率
+*/
+void RCC_UART4_EnableClock(void)
+{
+    RCC_MP_APB1ENSETR = UART4_EN_Msk;
+}
+
+/*
+    功能：开启 HSI 并等待时钟及其分频状态就绪
+    参数：无
+    返回值：HSIRDY 和 HSIDIVRDY 均置位时返回 0；等待超时返回 1
+    说明：轮询上限不是精确的毫秒超时；本函数不修改 HSI 分频值
+*/
+int RCC_HSI_EnableAndWaitReady(void)
+{
+    RCC_OCENSETR = (1U << 0U);
+
+    uint32_t timeout = RCC_HSI_WAIT_LIMIT;
+    while ((RCC_OCRDYR & RCC_HSI_READY_MASK) != RCC_HSI_READY_MASK)
+    {
+        if (timeout == 0U)
+        {
+            return 1;
+        }
+        timeout--;
+    }
+
+    return 0;
+}
+
+/*
+    功能：查询 UART4 在 HSI 时钟源下的标称内核时钟频率
+    参数：
+        @clock_hz：指向可写 uint32_t 变量的指针，成功时保存频率，单位 Hz
+    前置条件：查询期间时钟源、HSI 分频及相关时钟状态保持稳定
+    返回值：成功返回 0；以下任一条件成立时返回 1：
+            clock_hz 为 NULL、当前选源不是 HSI、
+            HSI 未就绪或 HSI 分频未就绪
+            失败时不修改有效指针所指向的变量
+    说明：当前仅支持 HSI，按标称 64 MHz 和 HSIDIV 配置计算频率；
+          结果为 UART 内部 PRESC 预分频之前的频率，不是波特率或实测频率；
+          本函数只读取时钟配置，不开启时钟或修改分频
+*/
+int RCC_UART4_GetKernelClockHz(uint32_t *clock_hz)
+{
+    if(clock_hz == NULL)
+    {
+        return 1;
+    }
+    if (((RCC_UART24CKSELR & 0x7U) != UART_HSI)||(RCC_OCRDYR & 0x05U) != 0x05U)
+    {
+        return 1;
+    }
+    uint8_t div_code = RCC_HSICFGR & 0x3U;
+    *clock_hz = 64000000U >> div_code;
+    return 0;
+}
+
+/*
+    功能：通过 MPU 侧 RCC 寄存器使能 TIM2 外设时钟
+    参数：无
+    返回值：无；本函数未实现时钟使能结果检测
+    说明：向 APB1ENSETR 的 TIM2EN 写 1，其他位写 0 保持原使能状态；
+          不修改共享时钟源或分频，不配置 TIM2，也不启动计数
+*/
+void RCC_TIM2_EnableClock(void)
+{
+    RCC_MP_APB1ENSETR = TIM2_EN_Msk;
+}
+
+/*
+    功能：通过 MPU 侧 RCC 寄存器开启 TIM4 时钟
+          向 APB1ENSETR.TIM4EN（bit2）写 1，其他外设使能状态保持；
+          不修改 APB1 分频/TIMG1PRE/共享时钟源，也不启动 TIM4。
+    参数：无
+    返回值：无；本函数不检查时钟使能是否成功
+*/
+void RCC_TIM4_EnableClock(void)
+{
+    RCC_MP_APB1ENSETR = TIM4_EN_Msk;
+}
+
+/*
+    功能：通过 MPU 侧 RCC 开启 I2C5 的 APB1 总线时钟。
+          向 RCC_MP_APB1ENSETR.I2C5EN（bit 24）写 1，保持现有内核时钟源。
+    参数：无
+    返回值：无。
+*/
+void RCC_I2C5_EnableClock(void)
+{
+    RCC_MP_APB1ENSETR = IIC5_EN_Msk;
+}

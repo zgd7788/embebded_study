@@ -17,13 +17,26 @@
 #define GTIM_CR1_ARPE_Msk         (1U << 7U)
 #define GTIM_CR1_UIFREMAP_Msk     (1U << 11U)
 
-/* SMCR、SR、EGR：SMS 是 bits2:0 与 bit16 组成的不连续字段。 */
+/* SMCR: SMS 是 bits2:0 与 bit16 组成的不连续字段。 */
 #define GTIM_SMCR_SMS_Msk         ((0x7U << 0U) | (1U << 16U))
 #define GTIM_SMCR_ECE_Msk         (1U << 14U)
-#define GTIM_SR_UIF_Msk           (1U << 0U)
+/* SR: 以第一个通道为基准，第二个通道整体左移1位 */
+#define GTIM_SR_UIF_Pos           0U
+#define GTIM_SR_UIF_Msk           (1U << GTIM_SR_UIF_Pos)
+#define GTIM_SR_CC1IF_Pos         1U
+#define GTIM_SR_CC1IF_Msk         (1U << GTIM_SR_CC1IF_Pos)
+#define GTIM_SR_CC1OF_Pos         9U
+#define GTIM_SR_CC1OF_Msk         (1U << GTIM_SR_CC1OF_Pos)
+/* EGR */
 #define GTIM_EGR_UG_Msk           (1U << 0U)
 
-/* CCMR：以下以第一个通道为基准，第二个通道整体左移 8 位。 */
+/* CCMR(input capture mode):以第一个通道为基准，第二个通道整体左移8位，CC1S同输出比较功能 */
+#define GTIM_CCMR1_IC1PSC_Pos   2U
+#define GTIM_CCMR1_IC1PSC_Msk   (0x3U << GTIM_CCMR1_IC1PSC_Pos)
+#define GTIM_CCMR1_IC1F_Pos     4U
+#define GTIM_CCMR1_IC1F_Msk     (0xFU << GTIM_CCMR1_IC1F_Pos)
+
+/* CCMR(output compare mode)：以下以第一个通道为基准，第二个通道整体左移 8 位。 */
 #define GTIM_CCMR1_CC1S_Msk       (0x3U << 0U)
 #define GTIM_CCMR1_OC1FE_Msk      (1U << 2U)
 #define GTIM_CCMR1_OC1PE_Msk      (1U << 3U)
@@ -35,8 +48,10 @@
 
 /* CCER：各通道相对于 CH1 分别左移 0、4、8、12 位。 */
 #define GTIM_CCER_CC1E_Msk        (1U << 0U)
-#define GTIM_CCER_CC1P_Msk        (1U << 1U)
-#define GTIM_CCER_CC1NP_Msk       (1U << 3U)
+#define GTIM_CCER_CC1P_Pos        1U
+#define GTIM_CCER_CC1P_Msk        (1U << GTIM_CCER_CC1P_Pos)
+#define GTIM_CCER_CC1NP_Pos       3U
+#define GTIM_CCER_CC1NP_Msk       (1U << GTIM_CCER_CC1NP_Pos)
 
 typedef enum
 {
@@ -58,12 +73,45 @@ typedef enum
     TIM_POLARITY_LOW,          /* 低电平有效 */
 }gtim_polarity_e;
 
+/* pwm 配置结构体 */
 typedef struct
 {
     gtim_pwm_mode_e Mode;
     gtim_polarity_e Polarity;
     uint32_t CompareValue;
 }gtim_pwm_config_t;
+
+/* 输入源选择，对应 CCxS 的未移位编码 */
+typedef enum
+{
+    TIM_IC_SELECT_DIRECT   = 1U, /* 01：直接映射 */
+    TIM_IC_SELECT_INDIRECT = 2U, /* 10：间接映射 */
+} gtim_select_e;
+
+/* 捕获边沿：这两种配置都要求 CCxNP = 0 */
+typedef enum
+{
+    TIM_IC_EDGE_RISING  = 0U, /* CCxP = 0：上升沿 */
+    TIM_IC_EDGE_FALLING = 1U, /* CCxP = 1：下降沿 */
+} gtim_captureedge_e;
+
+/* 捕获预分频，对应 ICxPSC 的未移位编码 */
+typedef enum
+{
+    TIM_IC_PSC_DIV1 = 0U, /* 00：每个有效边沿捕获 */
+    TIM_IC_PSC_DIV2 = 1U, /* 01：每2个有效边沿捕获 */
+    TIM_IC_PSC_DIV4 = 2U, /* 10：每4个有效边沿捕获 */
+    TIM_IC_PSC_DIV8 = 3U, /* 11：每8个有效边沿捕获 */
+} gtim_prescaler_e;
+
+/* 输入捕获配置结构体 */
+typedef struct
+{
+    gtim_select_e Selection;       /* 输入源映射 */
+    gtim_captureedge_e Edge;       /* 捕获边沿 */
+    gtim_prescaler_e Prescaler;    /* 捕获事件预分频 */
+    uint8_t Filter;    
+}gtim_ic_config_t;
 
 typedef struct
 {
@@ -94,75 +142,17 @@ void GTIMx_Start(gtim_t *TIMx);
 void GTIMx_Stop(gtim_t *TIMx);
 uint8_t GTIMx_PollUpdate(gtim_t *TIMx);
 uint32_t GTIMx_GetCounter(gtim_t *TIMx);
-/*
-    功能：显式改变共享计数位置；须开启目标时钟，并允许影响全部通道
-    参数：
-        @TIMx：TIM2～5 实例指针
-        @cnt：CNT 原始值，TIM3/4 最大 65535，TIM2/5 最大 UINT32_MAX
-    返回值：成功返回 0；实例或数值位宽无效返回 -1，失败不写寄存器
-*/
 int TIM_SetCounter(gtim_t *TIMx, uint32_t cnt);
-
-/*
-    功能：显式产生 UG，影响整个定时器的预装载及计数；须先开启目标时钟
-    参数：
-        @TIMx：TIM2～5 实例指针
-    返回值：写入 UG 后返回 0，不等待装载完成；实例无效返回 -1
-*/
 int TIM_GenerateUpdate(gtim_t *TIMx);
-
-/*
-    功能：清 UIF 并保留其他状态；须先开启目标时钟
-    参数：
-        @TIMx：TIM2～5 实例指针
-    返回值：写入清除值后返回 0；实例无效返回 -1，失败不写寄存器
-*/
 int TIM_ClearUpdateFlag(gtim_t *TIMx);
 
-/*
-    功能：配置指定 PWM 通道，保持输出关闭；须开启目标时钟、完成 BaseInit、
-          停止计数并独占配置；不产生 UG，不改变其他通道或共享计时配置
-    参数：
-        @TIMx：TIM2～5 实例指针
-        @channel：TIM_CHANNEL_1～TIM_CHANNEL_4
-        @config：非空只读配置，含 PWM1/2、高/低有效及原始 CCR 值；
-                 CCR 可大于 ARR，TIM3/4 最大 65535，TIM2/5 最大 UINT32_MAX
-    返回值：成功返回 0；参数无效返回 -1；参数合法但 CEN 为 1 返回 -2；
-            失败不写寄存器
-*/
 int TIM_PWM_ConfigChannel(gtim_t *TIMx, gtim_channel_e channel, const gtim_pwm_config_t *config);
-
-/*
-    功能：开启指定 PWM 输出和共享计数器，不清 CNT、不产生 UG；须先开启
-          时钟、配置 GPIO/PWM 并按需装载预装载，首段脉冲不保证完整
-    参数：
-        @TIMx：TIM2～5 实例指针
-        @channel：TIM_CHANNEL_1～TIM_CHANNEL_4
-    返回值：成功返回 0；实例/通道无效返回 -1；目标不是 PWM1/2 输出返回 -2；
-            失败不写寄存器
-*/
 int TIM_PWM_Start(gtim_t *TIMx, gtim_channel_e channel);
-
-/*
-    功能：仅关闭指定通道，不停止共享计数器、不保证引脚低电平；须先开启目标时钟
-    参数：
-        @TIMx：TIM2～5 实例指针
-        @channel：TIM_CHANNEL_1～TIM_CHANNEL_4
-    返回值：成功返回 0；实例/通道无效返回 -1，失败不写寄存器
-*/
 int TIM_PWM_Stop(gtim_t *TIMx, gtim_channel_e channel);
-
-/*
-    功能：更新目标 CCR，不重置 CNT、不产生 UG；须先开启目标时钟并配置 PWM，
-          开启 OCxPE 后在下次更新事件生效，操作期间不得并发修改配置
-    参数：
-        @TIMx：TIM2～5 实例指针
-        @channel：TIM_CHANNEL_1～TIM_CHANNEL_4
-        @compare_value：原始 CCR 值，可大于 ARR，不是百分数；
-                        TIM3/4 最大 65535，TIM2/5 最大 UINT32_MAX
-    返回值：成功写入返回 0；参数无效返回 -1；目标不是 PWM1/2 输出返回 -2；
-            失败不写寄存器
-*/
 int TIM_PWM_SetCompare(gtim_t *TIMx, gtim_channel_e channel, uint32_t compare_value);
 
+int TIM_IC_ConfigChannel(gtim_t *TIMx, gtim_channel_e channel, const gtim_ic_config_t *config);
+int TIM_IC_Start(gtim_t *TIMx, gtim_channel_e channel);
+int TIM_IC_Stop(gtim_t *TIMx, gtim_channel_e channel);
+int TIM_IC_ReadCapturedValue(gtim_t *TIMx, gtim_channel_e channel, uint32_t *capture);
 #endif

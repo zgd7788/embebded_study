@@ -103,6 +103,20 @@ static int tim_channel_is_pwm(const tim_channel_registers_t *registers)
 }
 
 /*
+    功能：读取通道配置，判断其是否为当前支持的直接或间接输入捕获模式
+          调用前须开启目标时钟，并保证检查期间配置不被并发修改
+    参数：
+        @registers：指向已成功取得的通道映射，只读且不能为空
+    返回值：CCxS 为 01（直接映射）或 10（间接映射）时返回 1，否则返回 0；
+            不识别 TRC 输入，不检查捕获使能、计数使能或 GPIO 复用状态
+*/
+static int tim_channel_is_capture(const tim_channel_registers_t *registers)
+{
+    uint32_t value = *registers->ccmr >> registers->ccmr_shift;
+
+    return ((value & GTIM_CCMR1_CC1S_Msk) == 1U) || ((value & GTIM_CCMR1_CC1S_Msk) == 2U);
+}
+/*
     功能：将 TIM2～5 配置为内部时钟、向上连续计数，初始化后保持停止
           调用前须开启目标时钟，且调用方独占整个定时器的配置。
           此操作改变所有通道共享的计时条件；关闭中断/DMA、装载配置、
@@ -379,4 +393,161 @@ int TIM_PWM_SetCompare(gtim_t *TIMx, gtim_channel_e channel, uint32_t compare_va
     }
     *registers.ccr = compare_value;
     return 0;
+}
+
+/*
+    功能：约定配置指定输入捕获通道，完成后保持捕获关闭。
+          计划要求先开启时钟、完成 BaseInit 并停止计数，
+          由调用方独占配置；不更改其他通道或共享 PSC/ARR/CNT，不产生 UG。
+    参数：
+        @TIMx：目标定时器寄存器组指针，仅支持 TIM2～5
+        @channel：目标通道，取 TIM_CHANNEL_1～TIM_CHANNEL_4
+        @config：非空只读配置指针；Selection 为直接或间接映射，
+                 Edge 为上升沿或下降沿，Prescaler 为每 1/2/4/8 个
+                 有效边沿捕获一次，Filter 为 ICxF 原始编码，范围 0～15
+    返回值：计划约定成功返回 0；参数无效返回 -1；参数合法但 CEN 为 1
+            返回 -2；所有失败路径不写寄存器，具体行为待实现后审阅
+*/
+int TIM_IC_ConfigChannel(gtim_t *TIMx, gtim_channel_e channel, const gtim_ic_config_t *config)
+{
+    tim_channel_registers_t registers;
+
+    if ((config == NULL) || (tim_channel_registers(TIMx, channel, &registers) != 0))
+    {
+        return -1;
+    }
+    if (((config->Edge != TIM_IC_EDGE_RISING) && (config->Edge != TIM_IC_EDGE_FALLING)) ||
+        ((config->Prescaler != TIM_IC_PSC_DIV1) && (config->Prescaler != TIM_IC_PSC_DIV2)
+        && (config->Prescaler != TIM_IC_PSC_DIV4) && (config->Prescaler != TIM_IC_PSC_DIV8))||
+        ((config->Selection != TIM_IC_SELECT_DIRECT) && (config->Selection != TIM_IC_SELECT_INDIRECT)) ||
+        (config->Filter > 15U))
+    {
+        return -1;
+    }
+    if((TIMx->CR1 & GTIM_CR1_CEN_Msk) != 0U)
+    {
+        return -2;
+    }
+    /* 修改 CCxS 前必须先关闭目标输出。 */
+    TIMx->CCER &= ~(GTIM_CCER_CC1E_Msk << registers.ccer_shift);
+
+    uint32_t ccmr_mask = (GTIM_CCMR1_CC1S_Msk | GTIM_CCMR1_IC1PSC_Msk |
+                          GTIM_CCMR1_IC1F_Msk) << registers.ccmr_shift;
+    uint32_t ccmr_value = *registers.ccmr;
+    ccmr_value &= ~ccmr_mask;
+
+    TIMx->CCER &= ~(GTIM_CCER_CC1NP_Msk << registers.ccer_shift);
+    if(config->Edge == TIM_IC_EDGE_RISING)
+    {
+        TIMx->CCER &= ~(GTIM_CCER_CC1P_Msk << registers.ccer_shift);
+    }
+    else
+    {
+        TIMx->CCER |= (GTIM_CCER_CC1P_Msk << registers.ccer_shift);
+    }
+    ccmr_value |= ((config->Selection) | (config->Prescaler << GTIM_CCMR1_IC1PSC_Pos)
+                    | (config->Filter << GTIM_CCMR1_IC1F_Pos)) << registers.ccmr_shift;
+    *registers.ccmr = ccmr_value;
+    return 0;
+}
+/*
+    功能：开启指定输入捕获通道，并启动该定时器的共享计数器
+          调用前须开启目标时钟，完成基础计时、GPIO 及捕获通道配置，
+          且保证配置期间无并发修改；本函数不检查初始化调用历史。
+          不清 CNT、不产生 UG，也不清除旧捕获值或状态标志；旧状态由
+          调用方按测量流程处理。计数器已运行时允许捕获通道加入，
+          首个捕获值仅记录一个边沿的位置，周期计算需取得连续有效样本。
+    参数：
+        @TIMx：目标定时器寄存器组指针，仅支持 TIM2～5
+        @channel：待开启的通道，取 TIM_CHANNEL_1～TIM_CHANNEL_4
+    返回值：成功返回 0；实例或通道无效返回 -1；目标通道的 CCxS
+            不是 01（直接映射）或 10（间接映射）返回 -2；
+            所有失败路径均不写寄存器
+*/
+int TIM_IC_Start(gtim_t *TIMx, gtim_channel_e channel)
+{
+    tim_channel_registers_t registers;
+    if (tim_channel_registers(TIMx, channel, &registers) != 0)
+    {
+        return -1;
+    }
+    if(!tim_channel_is_capture(&registers))
+    {
+        return -2;
+    }
+    TIMx->CCER |= GTIM_CCER_CC1E_Msk << registers.ccer_shift;
+    TIMx->CR1 |= GTIM_CR1_CEN_Msk;
+    return 0;
+}
+
+/*
+    功能：清除指定通道的 CCxE，关闭该通道的输入捕获
+          调用前须开启目标时钟，且调用方拥有该通道；本函数仅校验
+          实例和通道编号，不检查通道当前模式。保留共享计数器运行，
+          不清 CCR 或状态标志，不修改其他通道的使能或 GPIO 配置。
+    参数：
+        @TIMx：目标定时器寄存器组指针，仅支持 TIM2～5
+        @channel：待关闭的通道，取 TIM_CHANNEL_1～TIM_CHANNEL_4
+    返回值：成功返回 0；实例或通道无效返回 -1，且不写寄存器
+*/
+int TIM_IC_Stop(gtim_t *TIMx, gtim_channel_e channel)
+{
+    tim_channel_registers_t registers;
+    if (tim_channel_registers(TIMx, channel, &registers) != 0)
+    {
+        return -1;
+    }
+    TIMx->CCER &= ~(GTIM_CCER_CC1E_Msk << registers.ccer_shift);
+    return 0;
+}
+
+/*
+    功能：预留指定通道的非阻塞捕获读取接口。
+          计划通过状态返回区分新捕获、无数据及错误情况。
+    参数：
+        @TIMx：目标定时器寄存器组指针，计划仅支持 TIM2～5
+        @channel：目标通道，取 TIM_CHANNEL_1～TIM_CHANNEL_4
+        @capture：接收原始捕获计数的非空可写指针，不是周期或频率；
+                  计划仅在返回 1 时更新，TIM3/4 为 16 位计数、TIM2/5 为 32 位
+    返回值：计划约定 1 为取得新捕获、0 为无新捕获、-1 为参数错误、
+            -2 为通道模式不支持、-3 为过捕获。
+*/
+int TIM_IC_ReadCapturedValue(gtim_t *TIMx, gtim_channel_e channel, uint32_t *capture)
+{
+    tim_channel_registers_t registers;
+
+    if ((capture == NULL) ||
+        (tim_channel_registers(TIMx, channel, &registers) != 0))
+    {
+        return -1;
+    }
+    if (!tim_channel_is_capture(&registers))
+    {
+        return -2;
+    }
+
+    const uint32_t if_mask = GTIM_SR_CC1IF_Msk << (uint32_t)channel;
+    const uint32_t of_mask = GTIM_SR_CC1OF_Msk << (uint32_t)channel;
+    uint32_t status = TIMx->SR;
+    const int has_capture = (status & if_mask) != 0U;
+    uint32_t value = 0U;
+
+    if (has_capture)
+    {
+        value = *registers.ccr;
+        status |= TIMx->SR;  /* 保留读 CCR 前后看到的过捕获标志 */
+    }
+
+    if ((status & of_mask) != 0U)
+    {
+        TIMx->SR = ~of_mask;
+        return -3;
+    }
+    if (!has_capture)
+    {
+        return 0;
+    }
+
+    *capture = value;
+    return 1;
 }

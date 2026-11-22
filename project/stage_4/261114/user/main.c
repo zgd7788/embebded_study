@@ -87,12 +87,8 @@ int main(void)
         .FifoMode = UART_FIFO_ENABLE,
     };
   
-    if (RCC_UART4_EnableClock() != 0)
-    {
-        for (;;)
-        {
-        }
-    }
+    RCC_UART4_EnableClock();
+
     if (UART4_DeInit() != 0)
     {
         for (;;)
