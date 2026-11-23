@@ -1,4 +1,4 @@
-/* brief: 通过 UART4 报告 I2C5 单字节写入结果 */
+/* brief: I2C5 读取 CS42L51 ID，并验证多字节写入、读回和原值恢复。 */
 
 #include "gpio.h"
 #include "uart.h"
@@ -9,7 +9,17 @@
 
 #define AUDIO_RESET_WAIT_TICKS  2U
 #define I2C_WRITE_TIMEOUT_TICKS 1000U
+#define I2C_READ_TIMEOUT_TICKS  1000U
 #define UART_TX_TIMEOUT_TICKS   1000U
+
+#define CS42L51_ADDR7          0x4AU
+#define CS42L51_ID_REG         0x01U
+#define CS42L51_ID_MASK        0xF8U
+#define CS42L51_ID_EXPECTED    0xD8U
+/* DS679F1 第 60 页：0x0C 八位均为 ADCA 衰减量，FF/FE 分别为 -1/-2 dB。 */
+#define CS42L51_ADCA_ATT_REG   0x0CU
+#define CS42L51_ATT_TEST_A     0xFFU
+#define CS42L51_ATT_TEST_B     0xFEU
 
 /* UART4 接到板上的调试串口。 */
 #define UART4_TX_PORT GPIOG
@@ -96,10 +106,61 @@ static void console_write(const char *message)
 }
 
 /*
+    功能：把一个字节转换为带 0x 前缀的两位大写十六进制字符串，通过 UART4 输出。
+          调用前须初始化 UART4 并启动 TIM2，换行由调用方单独输出。
+    参数：
+        @value：要显示的一个字节，取值范围为 0～255。
+    返回值：无。串口超时时沿用 console_write 的提前结束策略。
+*/
+static void console_write_hex8(uint8_t value)
+{
+    const char hex[] = "0123456789ABCDEF";
+    char message[] = "0x00";
+    message[2] = hex[value >> 4U];
+    message[3] = hex[value & 0x0FU];
+    console_write(message);
+}
+
+/*
+    功能：通过 UART4 输出失败操作的名称以及 I2C 返回码对应的错误原因。
+          调用前须初始化 UART4 并启动 TIM2。
+    参数：
+        @operation：失败操作的名称，必须是非空、以 '\0' 结尾的字符串。
+        @result：I2C 接口返回的非零错误码，当前解释 -1/-2/-3/-4。
+    返回值：无。未知错误码显示通用失败消息。
+*/
+static void console_report_i2c_error(const char *operation, int result)
+{
+    console_write(operation);
+    console_write(": ");
+    switch (result)
+    {
+        case -1:
+            console_write("I2C invalid argument (-1)\r\n");
+            break;
+        case -2:
+            console_write("I2C timeout (-2)\r\n");
+            break;
+        case -3:
+            console_write("I2C NACK (-3)\r\n");
+            break;
+        case -4:
+            console_write("I2C unexpected STOP (-4)\r\n");
+            break;
+        default:
+            console_write("I2C failed\r\n");
+            break;
+    }
+}
+
+/*
     功能：初始化 TIM2、UART4 和 I2C5，释放 CS42L51 复位并等待两个 TIM2 tick，
-          随后向 7 位地址 0x4A 发送寄存器索引 0x01，通过 UART4 报告结果。
+          读取并核对芯片 ID，再对 ADCA 衰减寄存器 0x0C 做多字节写入验证。
+          验证顺序为读取原值、写入不同测试值、读回比较、恢复原值并再次读回。
+          尝试写测试值之后，即使写入或读回失败也会尝试恢复原值；恢复失败
+          会明确报告，不能视为配置已经恢复。本例只验证控制寄存器访问。
     参数：无
-    返回值：I2C 写入成功返回 0，初始化或写入失败返回 1。
+    返回值：初始化、ID 核对、测试值读回及原值恢复全部成功返回 0，任一步失败返回 1。
 */
 int main(void)
 {
@@ -166,27 +227,108 @@ int main(void)
     {
     }
 
-    const int result = I2C_MasterWriteByte(I2C5, 0x4AU, 0x01U, I2C_WRITE_TIMEOUT_TICKS);
-    switch (result)
+    /* 先确认目标器件身份，只核对高五位，允许不同的低三位修订号。 */
+    uint8_t id;
+    int result = I2C_ReadRegisterByte(I2C5, CS42L51_ADDR7, CS42L51_ID_REG,
+                                      &id, I2C_READ_TIMEOUT_TICKS);
+    if (result != 0)
     {
-        case 0:
-            console_write("I2C5 write OK (0x4A, data 0x01)\r\n");
-            return 0;
-        case -1:
-            console_write("I2C5 write invalid argument (-1)\r\n");
-            break;
-        case -2:
-            console_write("I2C5 write timeout (-2)\r\n");
-            break;
-        case -3:
-            console_write("I2C5 write NACK (-3)\r\n");
-            break;
-        case -4:
-            console_write("I2C5 write unexpected STOP (-4)\r\n");
-            break;
-        default:
-            console_write("I2C5 write failed\r\n");
-            break;
+        console_report_i2c_error("ID read", result);
+        return 1;
     }
-    return 1;
+    console_write("ID=");
+    console_write_hex8(id);
+    console_write("\r\n");
+    if ((id & CS42L51_ID_MASK) != CS42L51_ID_EXPECTED)
+    {
+        console_write("unexpected chip ID, write test skipped\r\n");
+        return 1;
+    }
+
+    /* 0x01 是只读 ID；本次选择可写的 0x0C，并先保存完整原值。 */
+    uint8_t original;
+    result = I2C_ReadRegisterByte(I2C5, CS42L51_ADDR7, CS42L51_ADCA_ATT_REG,
+                                  &original, I2C_READ_TIMEOUT_TICKS);
+    if (result != 0)
+    {
+        console_report_i2c_error("original value read", result);
+        return 1;
+    }
+    const uint8_t test_value = (original != CS42L51_ATT_TEST_A) ?
+                               CS42L51_ATT_TEST_A : CS42L51_ATT_TEST_B;
+    console_write("REG0x0C original=");
+    console_write_hex8(original);
+    console_write("\r\nREG0x0C test=");
+    console_write_hex8(test_value);
+    console_write("\r\n");
+
+    /* 一个 START 中依次发送“寄存器索引 + 数据”，所以 NBYTES=2。
+       MAP 的 INCR 位保持 0，此处只修改 0x0C，不访问后面的寄存器。 */
+    uint8_t write_buffer[2] = {CS42L51_ADCA_ATT_REG, test_value};
+    int status = 0;
+    result = I2C_MasterWrite(I2C5, CS42L51_ADDR7, write_buffer,
+                             sizeof(write_buffer), I2C_WRITE_TIMEOUT_TICKS);
+    if (result != 0)
+    {
+        console_report_i2c_error("test value write", result);
+        status = 1;
+    }
+    else
+    {
+        uint8_t readback;
+        result = I2C_ReadRegisterByte(I2C5, CS42L51_ADDR7, CS42L51_ADCA_ATT_REG,
+                                      &readback, I2C_READ_TIMEOUT_TICKS);
+        if (result != 0)
+        {
+            console_report_i2c_error("test value readback", result);
+            status = 1;
+        }
+        else
+        {
+            console_write("REG0x0C readback=");
+            console_write_hex8(readback);
+            console_write("\r\n");
+            if (readback != test_value)
+            {
+                console_write("write/readback FAIL\r\n");
+                status = 1;
+            }
+            else
+            {
+                console_write("write/readback PASS\r\n");
+            }
+        }
+    }
+
+    /* 写失败也可能已有部分数据到达从机，仍尝试写回保存的原值。
+       每次接口调用会先等待 BUSY 清零；恢复失败时停止并报告。 */
+    write_buffer[1] = original;
+    result = I2C_MasterWrite(I2C5, CS42L51_ADDR7, write_buffer,
+                             sizeof(write_buffer), I2C_WRITE_TIMEOUT_TICKS);
+    if (result != 0)
+    {
+        console_report_i2c_error("original value restore", result);
+        return 1;
+    }
+
+    uint8_t restored;
+    result = I2C_ReadRegisterByte(I2C5, CS42L51_ADDR7, CS42L51_ADCA_ATT_REG,
+                                  &restored, I2C_READ_TIMEOUT_TICKS);
+    if (result != 0)
+    {
+        console_report_i2c_error("restore readback", result);
+        return 1;
+    }
+    console_write("REG0x0C restored=");
+    console_write_hex8(restored);
+    console_write("\r\n");
+    if (restored != original)
+    {
+        console_write("restore FAIL\r\n");
+        return 1;
+    }
+    console_write("restore PASS\r\n");
+    console_write((status == 0) ? "I2C multi-byte write PASS\r\n" :
+                                  "I2C multi-byte write FAIL\r\n");
+    return status;
 }

@@ -1,6 +1,7 @@
 #ifndef I2C_H
 #define I2C_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define I2C5 ((i2c_t *)0x40015000U)
@@ -10,8 +11,8 @@
 
 /* CR2 */
 #define I2C_CR2_SADD_Msk        (0x3FFU)
-#define I2C_CR2_WD_WRN_Pos      (10U)
-#define I2C_CR2_WD_WRN_Msk      (1U << I2C_CR2_WD_WRN_Pos)
+#define I2C_CR2_RD_WRN_Pos      (10U)
+#define I2C_CR2_RD_WRN_Msk      (1U << I2C_CR2_RD_WRN_Pos)
 #define I2C_CR2_ADD10_Pos       (11U)
 #define I2C_CR2_ADD10_Msk       (1U << I2C_CR2_ADD10_Pos)
 #define I2C_CR2_START_Pos       (13U)
@@ -27,10 +28,14 @@
 /* ISR */
 #define I2C_ISR_TXIS_Pos        (1U)
 #define I2C_ISR_TXIS_Msk        (1U << I2C_ISR_TXIS_Pos)
+#define I2C_ISR_RXNE_Pos        (2U)
+#define I2C_ISR_RXNE_Msk        (1U << I2C_ISR_RXNE_Pos)
 #define I2C_ISR_NACKF_Pos       (4U)
 #define I2C_ISR_NACKF_Msk       (1U << I2C_ISR_NACKF_Pos)
 #define I2C_ISR_STOPF_Pos       (5U)
 #define I2C_ISR_STOPF_Msk       (1U << I2C_ISR_STOPF_Pos)
+#define I2C_ISR_TC_Pos          (6U)
+#define I2C_ISR_TC_Msk          (1U << I2C_ISR_TC_Pos)
 #define I2C_ISR_BUSY_Pos        (15U)
 #define I2C_ISR_BUSY_Msk        (1U << I2C_ISR_BUSY_Pos)
 
@@ -59,5 +64,11 @@ typedef struct
 
 int I2C_Init(i2c_t *I2Cx, uint32_t timing);
 int I2C_MasterWriteByte(i2c_t *I2Cx, uint8_t addr7, uint8_t data, uint32_t timeout_ticks);
-
+/* 连续发送 1～255 个数据字节，length 不包含从机地址字节。 */
+int I2C_MasterWrite(i2c_t *I2Cx, uint8_t addr7, const uint8_t *data,
+                    size_t length, uint32_t timeout_ticks);
+int I2C_MasterReadByte(i2c_t *I2Cx, uint8_t addr7, uint8_t *data_out, uint32_t timeout_ticks);
+/* 使用重复 START，读取 8 位寄存器地址对应的一个字节；详细约定见实现。 */
+int I2C_ReadRegisterByte(i2c_t *I2Cx, uint8_t addr7, uint8_t reg,
+                         uint8_t *data_out, uint32_t timeout_ticks);
 #endif

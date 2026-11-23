@@ -1,4 +1,4 @@
-TARGET := tim2
+TARGET := i2c5_cs42l51
 BUILD_DIR := build
 
 # ?=表示如果这个变量还没有定义，就给他这个默认值
