@@ -1,4 +1,4 @@
-/* brief: I2C5 读取 CS42L51 ID，并验证多字节写入、读回和原值恢复。 */
+/* brief: I2C5 验证 CS42L51 的寄存器写入、原值恢复和多字节连续接收。 */
 
 #include "gpio.h"
 #include "uart.h"
@@ -16,6 +16,9 @@
 #define CS42L51_ID_REG         0x01U
 #define CS42L51_ID_MASK        0xF8U
 #define CS42L51_ID_EXPECTED    0xD8U
+/* DS679F1 第 45 页：MAP.bit7=1 使寄存器指针每传输一个数据字节后自增。 */
+#define CS42L51_MAP_INCR       0x80U
+#define CS42L51_READ_TEST_LENGTH 3U
 /* DS679F1 第 60 页：0x0C 八位均为 ADCA 衰减量，FF/FE 分别为 -1/-2 dB。 */
 #define CS42L51_ADCA_ATT_REG   0x0CU
 #define CS42L51_ATT_TEST_A     0xFFU
@@ -154,13 +157,83 @@ static void console_report_i2c_error(const char *operation, int result)
 }
 
 /*
+    功能：分别单字节读取 CS42L51 的 0x01～0x03 作为参考，再设置 MAP.INCR，
+          通过 I2C_MasterRead 一次接收三个字节，与参考值逐项比较并输出结果。
+          调用前须完成 UART4、I2C5、TIM2 初始化并释放音频芯片复位。
+          此过程只写寄存器地址指针，不修改三个寄存器的内容；验证期间
+          不允许其他代码修改这些寄存器，以保证前后两次读取可比较。
+    参数：无
+    返回值：所有访问成功且三个字节与逐个读取的结果一致返回 0，
+            I2C 访问失败或任一字节比较不一致返回 1。
+*/
+static int cs42l51_verify_multibyte_read(void)
+{
+    uint8_t reference[CS42L51_READ_TEST_LENGTH];
+    uint8_t received[CS42L51_READ_TEST_LENGTH];
+
+    /* 参考值来自当前芯片，不把电源/时钟控制寄存器的复位默认值写死。 */
+    for (size_t i = 0U; i < sizeof(reference); ++i)
+    {
+        const uint8_t reg = (uint8_t)(CS42L51_ID_REG + i);
+        const int result = I2C_ReadRegisterByte(I2C5, CS42L51_ADDR7, reg,
+                                                &reference[i], I2C_READ_TIMEOUT_TICKS);
+        if (result != 0)
+        {
+            console_report_i2c_error("single register reference read", result);
+            return 1;
+        }
+    }
+
+    /* 0x81 = INCR=1 + 起始寄存器0x01。MAP 是发送的数据，从机地址仍为0x4A。
+       这里采用手册中的 STOP → START：先发 MAP，再发起独立的读事务。 */
+    const uint8_t map = CS42L51_MAP_INCR | CS42L51_ID_REG;
+    int result = I2C_MasterWrite(I2C5, CS42L51_ADDR7, &map, sizeof(map),
+                                  I2C_WRITE_TIMEOUT_TICKS);
+    if (result != 0)
+    {
+        console_report_i2c_error("auto-increment MAP write", result);
+        return 1;
+    }
+    result = I2C_MasterRead(I2C5, CS42L51_ADDR7, received, sizeof(received),
+                             I2C_READ_TIMEOUT_TICKS);
+    if (result != 0)
+    {
+        /* 失败时 received 可能只有部分数据，不显示或比较不完整结果。 */
+        console_report_i2c_error("multi-byte read", result);
+        return 1;
+    }
+
+    int status = 0;
+    for (size_t i = 0U; i < sizeof(received); ++i)
+    {
+        console_write("REG");
+        console_write_hex8((uint8_t)(CS42L51_ID_REG + i));
+        console_write(" single=");
+        console_write_hex8(reference[i]);
+        console_write(" burst=");
+        console_write_hex8(received[i]);
+        console_write("\r\n");
+        if (received[i] != reference[i])
+        {
+            status = 1;
+        }
+    }
+    console_write((status == 0) ? "I2C multi-byte read PASS\r\n" :
+                                  "I2C multi-byte read FAIL\r\n");
+    return status;
+}
+
+/*
     功能：初始化 TIM2、UART4 和 I2C5，释放 CS42L51 复位并等待两个 TIM2 tick，
           读取并核对芯片 ID，再对 ADCA 衰减寄存器 0x0C 做多字节写入验证。
           验证顺序为读取原值、写入不同测试值、读回比较、恢复原值并再次读回。
           尝试写测试值之后，即使写入或读回失败也会尝试恢复原值；恢复失败
-          会明确报告，不能视为配置已经恢复。本例只验证控制寄存器访问。
+          会明确报告，不能视为配置已经恢复。写入测试和恢复均成功后，
+          比较 0x01～0x03 的单字节参考值与多字节接收结果。
+          本例只验证控制寄存器访问，不开启音频数据传输。
     参数：无
-    返回值：初始化、ID 核对、测试值读回及原值恢复全部成功返回 0，任一步失败返回 1。
+    返回值：初始化、ID 核对、写入与恢复、多字节接收比较全部成功返回 0，
+            任一步失败返回 1。
 */
 int main(void)
 {
@@ -330,5 +403,9 @@ int main(void)
     console_write("restore PASS\r\n");
     console_write((status == 0) ? "I2C multi-byte write PASS\r\n" :
                                   "I2C multi-byte write FAIL\r\n");
-    return status;
+    if (status != 0)
+    {
+        return 1;
+    }
+    return cs42l51_verify_multibyte_read();
 }

@@ -194,6 +194,96 @@ int I2C_MasterWrite(i2c_t *I2Cx, uint8_t addr7, const uint8_t *data,
 }
 
 /*
+    功能：以主机模式在一次 START/STOP 之间连续接收 1～255 个数据字节。
+          调用前须完成 I2C5 初始化并启动 TIM2；当前用于单主机轮询访问，
+          访问期间不能由其他代码操作 I2C5。本函数不发送寄存器索引，
+          从机内部地址指针及地址自增规则由调用方按器件手册设置。
+          每次 RXNE 置位读取一个字节，末字节 NACK 和 STOP 由硬件产生。
+          超时后若已发起传输，会请求 STOP，但不等待恢复完成。
+    参数：
+        @I2Cx：I2C 寄存器组地址，当前仅支持 I2C5。
+        @addr7：从机的原始 7 位地址，不包含读写方向位。
+        @data：可写接收缓冲区，不能为 NULL，至少有 length 字节容量，
+               调用期间保持有效。失败时可能已写入部分数据，内容不回滚；
+               调用方只能在返回 0 后将其作为完整接收结果使用。
+        @length：期望接收字节数，范围为 1～255，不包含线上从机地址字节。
+        @timeout_ticks：等待空闲、接收数据及等待 STOP 共用的超时预算，
+                        单位为 TIM2 tick，0 表示立即超时且不发起传输。
+    返回值：0 表示读到全部数据、检测到 STOP 且未收到 NACK。
+           -1 表示实例、地址、缓冲区或长度无效，-2 表示等待超时。
+           -3 表示收到 NACK 后检测到 STOP，-4 表示 STOP 时接收数量不足。
+*/
+int I2C_MasterRead(i2c_t *I2Cx, uint8_t addr7, uint8_t *data,
+                   size_t length, uint32_t timeout_ticks)
+{
+    if ((I2Cx != I2C5) || (addr7 > 0x7FU) || (data == NULL) ||
+        (length == 0U) || (length > 255U))
+    {
+        return -1;
+    }
+
+    const uint32_t start_ticks = Timebase_GetTicks(TIM2);
+    while ((I2Cx->ISR & I2C_ISR_BUSY_Msk) != 0U)
+    {
+        if ((Timebase_GetTicks(TIM2) - start_ticks) >= timeout_ticks)
+        {
+            return -2;
+        }
+    }
+    if ((Timebase_GetTicks(TIM2) - start_ticks) >= timeout_ticks)
+    {
+        return -2;
+    }
+
+    I2Cx->ICR = I2C_ICR_NACKCF_Msk | I2C_ICR_STOPCF_Msk;
+
+    /* length 控制主机接收数量；从机是否地址自增与此配置相互独立。
+       首版不用 RELOAD，AUTOEND 让硬件在末字节 NACK 后自动发送 STOP。 */
+    uint32_t cr2 = I2Cx->CR2;
+    cr2 &= ~(I2C_CR2_SADD_Msk | I2C_CR2_RD_WRN_Msk |
+             I2C_CR2_ADD10_Msk | I2C_CR2_START_Msk | I2C_CR2_STOP_Msk |
+             I2C_CR2_NBYTES_Msk | I2C_CR2_RELOAD_Msk | I2C_CR2_AUTOEND_Msk);
+    cr2 |= ((uint32_t)addr7 << 1U) | ((uint32_t)length << I2C_CR2_NBYTES_Pos) |
+           I2C_CR2_RD_WRN_Msk | I2C_CR2_AUTOEND_Msk;
+    I2Cx->CR2 = cr2 | I2C_CR2_START_Msk;
+
+    size_t received = 0U;
+    for (;;)
+    {
+        const uint32_t status = I2Cx->ISR;
+
+        /* 最后一个字节和 STOPF 可能同时到来，必须先从 RXDR 取数据。
+           received < length 确保软件只在调用方约定的容量范围内写入。 */
+        if ((received < length) && ((status & I2C_ISR_RXNE_Msk) != 0U))
+        {
+            data[received] = (uint8_t)I2Cx->RXDR;
+            ++received;
+        }
+
+        if ((status & I2C_ISR_STOPF_Msk) != 0U)
+        {
+            I2Cx->ICR = I2C_ICR_STOPCF_Msk | I2C_ICR_NACKCF_Msk;
+            if ((status & I2C_ISR_NACKF_Msk) != 0U)
+            {
+                return -3;
+            }
+            if (received != length)
+            {
+                return -4;
+            }
+            return 0;
+        }
+
+        /* 收到全部数据也要继续等 STOP；整笔访问只使用同一个起始 tick。 */
+        if ((Timebase_GetTicks(TIM2) - start_ticks) >= timeout_ticks)
+        {
+            I2Cx->CR2 |= I2C_CR2_STOP_Msk;
+            return -2;
+        }
+    }
+}
+
+/*
     功能：以主机模式发起独立的单字节读事务，由硬件发送末字节 NACK 和 STOP。
           调用前须完成 I2C5 初始化并启动 TIM2。读取 RXDR 后先暂存数据，
           正常 STOP 后才交付给调用方；RXNE 和 STOPF 同时出现时先取数据。

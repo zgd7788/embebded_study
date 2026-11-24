@@ -67,6 +67,9 @@ int I2C_MasterWriteByte(i2c_t *I2Cx, uint8_t addr7, uint8_t data, uint32_t timeo
 /* 连续发送 1～255 个数据字节，length 不包含从机地址字节。 */
 int I2C_MasterWrite(i2c_t *I2Cx, uint8_t addr7, const uint8_t *data,
                     size_t length, uint32_t timeout_ticks);
+/* 连续接收 1～255 字节；data 至少有 length 字节容量，失败时可能已写入部分数据。 */
+int I2C_MasterRead(i2c_t *I2Cx, uint8_t addr7, uint8_t *data,
+                   size_t length, uint32_t timeout_ticks);
 int I2C_MasterReadByte(i2c_t *I2Cx, uint8_t addr7, uint8_t *data_out, uint32_t timeout_ticks);
 /* 使用重复 START，读取 8 位寄存器地址对应的一个字节；详细约定见实现。 */
 int I2C_ReadRegisterByte(i2c_t *I2Cx, uint8_t addr7, uint8_t reg,

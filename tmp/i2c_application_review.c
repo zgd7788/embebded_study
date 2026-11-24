@@ -1,5 +1,5 @@
-/* Execute the real application with platform/I2C stubs. Checks restoration
- * and diagnostics, not the driver, physical bus, or codec hardware. */
+/* Execute the real application with platform/I2C stubs. Checks restoration,
+ * burst-read comparisons and diagnostics, not physical hardware. */
 #include <stdio.h>
 #include <string.h>
 #define main i2c_application_main
@@ -8,10 +8,15 @@
 
 enum fault { NONE, ID_READ_FAIL, WRONG_ID, ORIGINAL_READ_FAIL,
              PARTIAL_WRITE_FAIL, TEST_READ_FAIL, TEST_MISMATCH,
-             RESTORE_WRITE_FAIL, RESTORE_READ_FAIL, RESTORE_MISMATCH };
+             RESTORE_WRITE_FAIL, RESTORE_READ_FAIL, RESTORE_MISMATCH,
+             REFERENCE_READ_FAIL, MAP_WRITE_FAIL, BURST_READ_FAIL,
+             BURST_MISMATCH_FIRST, BURST_MISMATCH_MIDDLE, BURST_MISMATCH_LAST,
+             BURST_REPEATED_REGISTER };
 static enum fault fault;
 static uint8_t saved, reg_value;
 static unsigned reads, writes, checks, failures;
+static unsigned reference_reads, map_writes, burst_reads;
+static uint8_t reference_values[3];
 static uint32_t ticks;
 static char output[4096];
 static size_t output_length;
@@ -54,6 +59,14 @@ int I2C_ReadRegisterByte(i2c_t *i2c, uint8_t addr, uint8_t reg,
 {
     CHECK(i2c == I2C5 && addr == 0x4AU && data != NULL && timeout != 0U);
     ++reads;
+    if (reg >= 0x01U && reg <= 0x03U && writes == 2U)
+    {
+        CHECK(reg == 0x01U + reference_reads);
+        ++reference_reads;
+        if (fault == REFERENCE_READ_FAIL && reg == 0x02U) return -2;
+        *data = reference_values[reg - 1U];
+        return 0;
+    }
     if (reg == 0x01U)
     {
         CHECK(reads == 1U && writes == 0U);
@@ -77,7 +90,15 @@ int I2C_ReadRegisterByte(i2c_t *i2c, uint8_t addr, uint8_t reg,
 int I2C_MasterWrite(i2c_t *i2c, uint8_t addr, const uint8_t *data,
                     size_t count, uint32_t timeout)
 {
-    CHECK(i2c == I2C5 && addr == 0x4AU && count == 2U && timeout != 0U);
+    CHECK(i2c == I2C5 && addr == 0x4AU && timeout != 0U);
+    if (count == 1U)
+    {
+        ++map_writes;
+        CHECK(writes == 2U && reference_reads == 3U);
+        CHECK(data[0] == 0x81U && map_writes == 1U);
+        return (fault == MAP_WRITE_FAIL) ? -3 : 0;
+    }
+    CHECK(count == 2U);
     CHECK(data[0] == 0x0CU); /* never writes ID, power, or reserved registers */
     ++writes;
     CHECK(writes <= 2U);
@@ -96,11 +117,36 @@ int I2C_MasterWrite(i2c_t *i2c, uint8_t addr, const uint8_t *data,
     return 0;
 }
 
+int I2C_MasterRead(i2c_t *i2c, uint8_t addr, uint8_t *data,
+                   size_t count, uint32_t timeout)
+{
+    CHECK(i2c == I2C5 && addr == 0x4AU && count == 3U && timeout != 0U);
+    CHECK(reference_reads == 3U && map_writes == 1U);
+    ++burst_reads;
+    CHECK(burst_reads == 1U);
+    data[0] = reference_values[0];
+    if (fault == BURST_READ_FAIL) return -2; /* partial data must not be used */
+    memcpy(data, reference_values, count);
+    if (fault >= BURST_MISMATCH_FIRST && fault <= BURST_MISMATCH_LAST)
+    {
+        data[(unsigned)fault - BURST_MISMATCH_FIRST] ^= 1U;
+    }
+    if (fault == BURST_REPEATED_REGISTER)
+    {
+        data[1] = data[2] = data[0];
+    }
+    return 0;
+}
+
 static void run_case(enum fault selected, uint8_t original)
 {
     fault = selected;
     saved = reg_value = original;
     reads = writes = 0U;
+    reference_reads = map_writes = burst_reads = 0U;
+    reference_values[0] = 0xD9U;
+    reference_values[1] = (original == 0x55U) ? 0x35U : 0x00U;
+    reference_values[2] = (original == 0x55U) ? 0x97U : 0xAEU;
     ticks = 0U;
     output_length = 0U;
     output[0] = '\0';
@@ -110,7 +156,13 @@ static void run_case(enum fault selected, uint8_t original)
     CHECK(writes == (no_write ? 0U : 2U));
     CHECK(reg_value == ((selected == RESTORE_WRITE_FAIL) ?
                         ((original == 0xFFU) ? 0xFEU : 0xFFU) : original));
-    CHECK((strstr(output, "I2C multi-byte write PASS\r\n") != NULL) == (selected == NONE));
+    const int write_passed = selected == NONE || selected >= REFERENCE_READ_FAIL;
+    CHECK((strstr(output, "I2C multi-byte write PASS\r\n") != NULL) == write_passed);
+    CHECK((strstr(output, "I2C multi-byte read PASS\r\n") != NULL) == (selected == NONE));
+    const int reaches_burst = write_passed && selected != REFERENCE_READ_FAIL && selected != MAP_WRITE_FAIL;
+    CHECK(burst_reads == (reaches_burst ? 1U : 0U));
+    CHECK(map_writes == ((write_passed && selected != REFERENCE_READ_FAIL) ? 1U : 0U));
+    CHECK((strstr(output, "single=") != NULL) == (reaches_burst && selected != BURST_READ_FAIL));
     CHECK((strstr(output, "restore PASS\r\n") != NULL) ==
           (!no_write && selected != RESTORE_WRITE_FAIL &&
            selected != RESTORE_READ_FAIL && selected != RESTORE_MISMATCH));
@@ -127,6 +179,18 @@ static void run_case(enum fault selected, uint8_t original)
     {
         CHECK(strstr(output, "I2C multi-byte write FAIL\r\n") != NULL);
     }
+    if (selected >= BURST_MISMATCH_FIRST)
+    {
+        CHECK(strstr(output, "I2C multi-byte read FAIL\r\n") != NULL);
+    }
+    if (selected == NONE)
+    {
+        CHECK(strstr(output, "REG0x01 single=0xD9 burst=0xD9\r\n") != NULL);
+        CHECK(strstr(output, original == 0x55U ? "REG0x02 single=0x35 burst=0x35\r\n" :
+                     "REG0x02 single=0x00 burst=0x00\r\n") != NULL);
+        CHECK(strstr(output, original == 0x55U ? "REG0x03 single=0x97 burst=0x97\r\n" :
+                     "REG0x03 single=0xAE burst=0xAE\r\n") != NULL);
+    }
 }
 
 int main(void)
@@ -134,7 +198,7 @@ int main(void)
     run_case(NONE, 0x00U);
     run_case(NONE, 0xFFU);
     run_case(NONE, 0x55U);
-    for (int selected = ID_READ_FAIL; selected <= RESTORE_MISMATCH; ++selected)
+    for (int selected = ID_READ_FAIL; selected <= BURST_REPEATED_REGISTER; ++selected)
     {
         run_case((enum fault)selected, 0x00U);
     }
