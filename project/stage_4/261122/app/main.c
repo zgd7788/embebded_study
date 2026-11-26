@@ -5,7 +5,7 @@
 #include "rcc.h"
 #include "gtim.h"
 #include "timebase.h"
-#include "i2c.h"
+#include "cs42l51.h"
 
 #define AUDIO_RESET_WAIT_TICKS  2U
 #define I2C_WRITE_TIMEOUT_TICKS 1000U
@@ -187,19 +187,16 @@ static int cs42l51_verify_multibyte_read(void)
     /* 0x81 = INCR=1 + 起始寄存器0x01。MAP 是发送的数据，从机地址仍为0x4A。
        这里采用手册中的 STOP → START：先发 MAP，再发起独立的读事务。 */
     const uint8_t map = CS42L51_MAP_INCR | CS42L51_ID_REG;
-    int result = I2C_MasterWrite(I2C5, CS42L51_ADDR7, &map, sizeof(map),
-                                  I2C_WRITE_TIMEOUT_TICKS);
-    if (result != 0)
+    int result = I2C_MasterWrite(I2C5, CS42L51_ADDR7, &map, sizeof(map), I2C_WRITE_TIMEOUT_TICKS);
+    if(result != 0U)
     {
-        console_report_i2c_error("auto-increment MAP write", result);
+        console_report_i2c_error("error", result);
         return 1;
     }
-    result = I2C_MasterRead(I2C5, CS42L51_ADDR7, received, sizeof(received),
-                             I2C_READ_TIMEOUT_TICKS);
-    if (result != 0)
+    result = I2C_MasterRead(I2C5, CS42L51_ADDR7, received, sizeof(received), I2C_READ_TIMEOUT_TICKS);
+    if(result != 0U)
     {
-        /* 失败时 received 可能只有部分数据，不显示或比较不完整结果。 */
-        console_report_i2c_error("multi-byte read", result);
+        console_report_i2c_error("error", result);
         return 1;
     }
 
@@ -266,6 +263,11 @@ int main(void)
         .AlternateFunc = GPIO_AF_4
     };
 
+    const cs42l51_t cs42l51_config = {
+        .addr7 = CS42L51_ADDR7,
+        .i2c = I2C5,
+    };
+
     RCC_TIM2_EnableClock();
     if (GTIM_BaseInit(TIM2, 20887U, UINT32_MAX) != 0)
     {
@@ -302,8 +304,7 @@ int main(void)
 
     /* 先确认目标器件身份，只核对高五位，允许不同的低三位修订号。 */
     uint8_t id;
-    int result = I2C_ReadRegisterByte(I2C5, CS42L51_ADDR7, CS42L51_ID_REG,
-                                      &id, I2C_READ_TIMEOUT_TICKS);
+    int result = CS42L51_ReadReg(&cs42l51_config, CS42L51_ID_REG, &id, I2C_READ_TIMEOUT_TICKS);
     if (result != 0)
     {
         console_report_i2c_error("ID read", result);
@@ -320,8 +321,7 @@ int main(void)
 
     /* 0x01 是只读 ID；本次选择可写的 0x0C，并先保存完整原值。 */
     uint8_t original;
-    result = I2C_ReadRegisterByte(I2C5, CS42L51_ADDR7, CS42L51_ADCA_ATT_REG,
-                                  &original, I2C_READ_TIMEOUT_TICKS);
+    result = CS42L51_ReadReg(&cs42l51_config, CS42L51_ADCA_ATT_REG, &original, I2C_READ_TIMEOUT_TICKS);
     if (result != 0)
     {
         console_report_i2c_error("original value read", result);
@@ -337,10 +337,9 @@ int main(void)
 
     /* 一个 START 中依次发送“寄存器索引 + 数据”，所以 NBYTES=2。
        MAP 的 INCR 位保持 0，此处只修改 0x0C，不访问后面的寄存器。 */
-    uint8_t write_buffer[2] = {CS42L51_ADCA_ATT_REG, test_value};
     int status = 0;
-    result = I2C_MasterWrite(I2C5, CS42L51_ADDR7, write_buffer,
-                             sizeof(write_buffer), I2C_WRITE_TIMEOUT_TICKS);
+    result = CS42L51_WriteReg(&cs42l51_config, CS42L51_ADCA_ATT_REG, test_value, I2C_WRITE_TIMEOUT_TICKS);
+
     if (result != 0)
     {
         console_report_i2c_error("test value write", result);
@@ -349,8 +348,8 @@ int main(void)
     else
     {
         uint8_t readback;
-        result = I2C_ReadRegisterByte(I2C5, CS42L51_ADDR7, CS42L51_ADCA_ATT_REG,
-                                      &readback, I2C_READ_TIMEOUT_TICKS);
+        result = CS42L51_ReadReg(&cs42l51_config, CS42L51_ADCA_ATT_REG, &readback, I2C_READ_TIMEOUT_TICKS);
+
         if (result != 0)
         {
             console_report_i2c_error("test value readback", result);
@@ -375,9 +374,8 @@ int main(void)
 
     /* 写失败也可能已有部分数据到达从机，仍尝试写回保存的原值。
        每次接口调用会先等待 BUSY 清零；恢复失败时停止并报告。 */
-    write_buffer[1] = original;
-    result = I2C_MasterWrite(I2C5, CS42L51_ADDR7, write_buffer,
-                             sizeof(write_buffer), I2C_WRITE_TIMEOUT_TICKS);
+    result = CS42L51_WriteReg(&cs42l51_config, CS42L51_ADCA_ATT_REG, original, I2C_WRITE_TIMEOUT_TICKS);
+
     if (result != 0)
     {
         console_report_i2c_error("original value restore", result);
@@ -385,8 +383,8 @@ int main(void)
     }
 
     uint8_t restored;
-    result = I2C_ReadRegisterByte(I2C5, CS42L51_ADDR7, CS42L51_ADCA_ATT_REG,
-                                  &restored, I2C_READ_TIMEOUT_TICKS);
+    result = CS42L51_ReadReg(&cs42l51_config, CS42L51_ADCA_ATT_REG, &restored, I2C_READ_TIMEOUT_TICKS);
+
     if (result != 0)
     {
         console_report_i2c_error("restore readback", result);

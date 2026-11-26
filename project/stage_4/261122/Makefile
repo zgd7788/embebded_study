@@ -18,7 +18,8 @@ READELF := $(CROSS_COMPILE)readelf
 CPU_FLAGS := -mcpu=cortex-a7 -marm -mfloat-abi=soft
 CFLAGS := $(CPU_FLAGS) -std=c11 -ffreestanding -fno-builtin \
 	-fno-stack-protector -fno-unwind-tables -fno-asynchronous-unwind-tables \
-	-O0 -g -Wall -Wextra -Werror -Idrivers/mcu/inc -Iplatform -Idrivers/devices/buzzer -Iboard/fsmpla
+	-O0 -g -Wall -Wextra -Werror -Idrivers/mcu/inc -Iplatform -Idrivers/devices/buzzer \
+	-Iboard/fsmpla -Idrivers/devices/cs42l51
 ASFLAGS := $(CPU_FLAGS) -g
 LDFLAGS := $(CPU_FLAGS) -nostdlib -Wl,-T,linker.ld \
 	-Wl,-Map,$(BUILD_DIR)/$(TARGET).map -Wl,--build-id=none
@@ -30,7 +31,8 @@ C_SRCS := app/main.c \
     drivers/mcu/src/gtim.c \
     board/fsmpla/timebase.c \
     drivers/devices/buzzer/buzzer.c \
-    drivers/mcu/src/i2c.c
+    drivers/mcu/src/i2c.c \
+	drivers/devices/cs42l51/cs42l51.c
 S_SRCS := start/start.S
 OBJS := $(addprefix $(BUILD_DIR)/,$(C_SRCS:.c=.o) $(S_SRCS:.S=.o))
 # .PHONY 表示把右边这些名称声明为伪目标。
